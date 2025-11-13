@@ -867,9 +867,13 @@ async function handleStreamGenerateContent(req, res) {
     abortController = new AbortController()
 
     // 处理客户端断开连接
+    let clientDisconnected = false
     req.on('close', () => {
       if (abortController && !abortController.signal.aborted) {
-        logger.info('Client disconnected, aborting stream request')
+        clientDisconnected = true
+        logger.warn(
+          `⚠️ Client disconnected before stream completed for ${model} (${req.apiKey?.id || 'unknown'})`
+        )
         abortController.abort()
       }
     })
@@ -990,6 +994,16 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('end', async () => {
+      if (clientDisconnected) {
+        logger.warn('⚠️ Stream ended after client disconnection')
+        return
+      }
+
+      // 检查缓冲区是否有遗留数据
+      if (streamBuffer.trim()) {
+        logger.warn(`⚠️ Stream ended with incomplete data in buffer: ${streamBuffer.substring(0, 100)}`)
+      }
+
       logger.info('Stream completed successfully')
 
       // 记录使用统计
@@ -1028,6 +1042,11 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('error', (error) => {
+      if (clientDisconnected) {
+        logger.warn('⚠️ Stream error occurred after client disconnection:', error.message)
+        return
+      }
+
       logger.error('Stream error:', error)
       if (!res.headersSent) {
         res.status(500).json({
