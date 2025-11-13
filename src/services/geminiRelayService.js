@@ -5,7 +5,7 @@ const config = require('../../config/config')
 const apiKeyService = require('./apiKeyService')
 
 // Gemini API 配置
-const GEMINI_API_BASE = 'https://cloudcode.googleapis.com/v1'
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/openai'
 const DEFAULT_MODEL = 'models/gemini-2.0-flash-exp'
 
 // 创建代理 agent（使用统一的代理工具）
@@ -366,17 +366,10 @@ async function sendGeminiRequest({
 }
 
 // 获取可用模型列表
+// 支持使用 Gemini API Key 获取官方模型列表
+// 参考：https://ai.google.dev/gemini-api/docs/openai?hl=zh-cn#list-models
 async function getAvailableModels(accessToken, proxy, projectId, location = 'us-central1') {
-  let apiUrl
-  if (projectId) {
-    // 使用项目特定的 URL 格式
-    apiUrl = `${GEMINI_API_BASE}/projects/${projectId}/locations/${location}/models`
-    logger.debug(`Fetching models with projectId: ${projectId}, location: ${location}`)
-  } else {
-    // 使用标准 URL 格式
-    apiUrl = `${GEMINI_API_BASE}/models`
-    logger.debug('Fetching models without projectId')
-  }
+  const apiUrl = `${GEMINI_API_BASE}/models`
 
   const axiosConfig = {
     method: 'GET',
@@ -401,27 +394,27 @@ async function getAvailableModels(accessToken, proxy, projectId, location = 'us-
 
   try {
     const response = await axios(axiosConfig)
-    const models = response.data.models || []
+    const models = response.data.data || response.data.models || []
 
     // 转换为 OpenAI 格式
-    return models
-      .filter((model) => model.supportedGenerationMethods?.includes('generateContent'))
-      .map((model) => ({
-        id: model.name.replace('models/', ''),
-        object: 'model',
-        created: Date.now() / 1000,
-        owned_by: 'google'
-      }))
+    return models.map((model) => ({
+      id: model.id.replace('models/', ''),
+      object: 'model',
+      created: Math.floor(Date.now() / 1000),
+      owned_by: 'google'
+    }))
   } catch (error) {
-    logger.error('Failed to get Gemini models:', error)
-    // 返回默认模型列表
+    // OAuth token 无法访问 API Key 专用端点，降级为默认模型列表
+    logger.warn(
+      `Unable to fetch Gemini models (likely OAuth token used): ${error.message}. Returning default models.`
+    )
+
+    // 返回默认的主要模型列表
+    const created = Math.floor(Date.now() / 1000)
     return [
-      {
-        id: 'gemini-2.0-flash-exp',
-        object: 'model',
-        created: Date.now() / 1000,
-        owned_by: 'google'
-      }
+      { id: 'gemini-2.5-pro', object: 'model', owned_by: 'google', created },
+      { id: 'gemini-2.5-flash', object: 'model', owned_by: 'google', created },
+      { id: 'gemini-2.5-flash-lite', object: 'model', owned_by: 'google', created }
     ]
   }
 }
