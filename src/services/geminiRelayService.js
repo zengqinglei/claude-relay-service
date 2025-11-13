@@ -8,6 +8,14 @@ const apiKeyService = require('./apiKeyService')
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/openai'
 const DEFAULT_MODEL = 'models/gemini-2.0-flash-exp'
 
+// 硬编码的模型列表（与 gemini-cli 保持一致）
+// 参考：https://ai.google.dev/gemini-api/docs/models
+const SUPPORTED_MODELS = [
+  { id: 'gemini-2.5-pro', description: 'For complex tasks requiring deep reasoning and creativity' },
+  { id: 'gemini-2.5-flash', description: 'For tasks needing a balance of speed and reasoning' },
+  { id: 'gemini-2.5-flash-lite', description: 'For simple tasks that need to be done quickly' }
+]
+
 // 创建代理 agent（使用统一的代理工具）
 function createProxyAgent(proxyConfig) {
   return ProxyHelper.createProxyAgent(proxyConfig)
@@ -365,58 +373,20 @@ async function sendGeminiRequest({
   }
 }
 
-// 获取可用模型列表
-// 支持使用 Gemini API Key 获取官方模型列表
-// 参考：https://ai.google.dev/gemini-api/docs/openai?hl=zh-cn#list-models
-async function getAvailableModels(accessToken, proxy, projectId, location = 'us-central1') {
-  const apiUrl = `${GEMINI_API_BASE}/models`
+// 获取可用模型列表（硬编码）
+// 与 gemini-cli 保持一致，不进行 API 调用
+// 参考：https://ai.google.dev/gemini-api/docs/models
+function getAvailableModels() {
+  const created = Math.floor(Date.now() / 1000)
 
-  const axiosConfig = {
-    method: 'GET',
-    url: apiUrl,
-    headers: {
-      Authorization: `Bearer ${accessToken}`
-    },
-    timeout: config.requestTimeout || 600000
-  }
+  logger.debug('📋 Returning hardcoded model list (3 models)')
 
-  const proxyAgent = createProxyAgent(proxy)
-  if (proxyAgent) {
-    axiosConfig.httpAgent = proxyAgent
-    axiosConfig.httpsAgent = proxyAgent
-    axiosConfig.proxy = false
-    logger.info(
-      `🌐 Using proxy for Gemini models request: ${ProxyHelper.getProxyDescription(proxy)}`
-    )
-  } else {
-    logger.debug('🌐 No proxy configured for Gemini models request')
-  }
-
-  try {
-    const response = await axios(axiosConfig)
-    const models = response.data.data || response.data.models || []
-
-    // 转换为 OpenAI 格式
-    return models.map((model) => ({
-      id: model.id.replace('models/', ''),
-      object: 'model',
-      created: Math.floor(Date.now() / 1000),
-      owned_by: 'google'
-    }))
-  } catch (error) {
-    // OAuth token 无法访问 API Key 专用端点，降级为默认模型列表
-    logger.warn(
-      `Unable to fetch Gemini models (likely OAuth token used): ${error.message}. Returning default models.`
-    )
-
-    // 返回默认的主要模型列表
-    const created = Math.floor(Date.now() / 1000)
-    return [
-      { id: 'gemini-2.5-pro', object: 'model', owned_by: 'google', created },
-      { id: 'gemini-2.5-flash', object: 'model', owned_by: 'google', created },
-      { id: 'gemini-2.5-flash-lite', object: 'model', owned_by: 'google', created }
-    ]
-  }
+  return SUPPORTED_MODELS.map((model) => ({
+    id: model.id,
+    object: 'model',
+    created,
+    owned_by: 'google'
+  }))
 }
 
 // Count Tokens API - 用于Gemini CLI兼容性

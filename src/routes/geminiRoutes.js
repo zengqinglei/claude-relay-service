@@ -243,36 +243,8 @@ router.get('/models', authenticateApiKey, async (req, res) => {
       })
     }
 
-    // 选择账户获取模型列表
-    let account = null
-    try {
-      const accountSelection = await unifiedGeminiScheduler.selectAccountForApiKey(
-        apiKeyData,
-        null,
-        null
-      )
-      account = await geminiAccountService.getAccount(accountSelection.accountId)
-    } catch (error) {
-      logger.warn('Failed to select Gemini account for models endpoint:', error)
-    }
-
-    if (!account) {
-      // 返回默认模型列表
-      return res.json({
-        object: 'list',
-        data: [
-          {
-            id: 'gemini-2.5-flash',
-            object: 'model',
-            created: Date.now() / 1000,
-            owned_by: 'google'
-          }
-        ]
-      })
-    }
-
-    // 获取模型列表
-    const models = await getAvailableModels(account.accessToken, account.proxy)
+    // 获取模型列表（硬编码，不依赖账户）
+    const models = getAvailableModels()
 
     res.json({
       object: 'list',
