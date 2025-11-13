@@ -6,6 +6,11 @@ const geminiAccountService = require('../services/geminiAccountService')
 const unifiedGeminiScheduler = require('../services/unifiedGeminiScheduler')
 const { getAvailableModels } = require('../services/geminiRelayService')
 const crypto = require('crypto')
+const {
+  convertOpenAIMessagesToGemini,
+  convertGeminiResponseToOpenAI
+} = require('../utils/geminiFormatConverter')
+const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 
 // 生成会话哈希
 function generateSessionHash(req) {
@@ -25,155 +30,29 @@ function checkPermissions(apiKeyData, requiredPermission = 'gemini') {
   return permissions === 'all' || permissions === requiredPermission
 }
 
-// 转换 OpenAI 消息格式到 Gemini 格式
-function convertMessagesToGemini(messages) {
-  const contents = []
-  let systemInstruction = ''
-
-  // 辅助函数：提取文本内容
-  function extractTextContent(content) {
-    // 处理 null 或 undefined
-    if (content === null || content === undefined) {
-      return ''
-    }
-
-    // 处理字符串
-    if (typeof content === 'string') {
-      return content
-    }
-
-    // 处理数组格式的内容
-    if (Array.isArray(content)) {
-      return content
-        .map((item) => {
-          if (item === null || item === undefined) {
-            return ''
-          }
-          if (typeof item === 'string') {
-            return item
-          }
-          if (typeof item === 'object') {
-            // 处理 {type: 'text', text: '...'} 格式
-            if (item.type === 'text' && item.text) {
-              return item.text
-            }
-            // 处理 {text: '...'} 格式
-            if (item.text) {
-              return item.text
-            }
-            // 处理嵌套的对象或数组
-            if (item.content) {
-              return extractTextContent(item.content)
-            }
-          }
-          return ''
-        })
-        .join('')
-    }
-
-    // 处理对象格式的内容
-    if (typeof content === 'object') {
-      // 处理 {text: '...'} 格式
-      if (content.text) {
-        return content.text
-      }
-      // 处理 {content: '...'} 格式
-      if (content.content) {
-        return extractTextContent(content.content)
-      }
-      // 处理 {parts: [{text: '...'}]} 格式
-      if (content.parts && Array.isArray(content.parts)) {
-        return content.parts
-          .map((part) => {
-            if (part && part.text) {
-              return part.text
-            }
-            return ''
-          })
-          .join('')
-      }
-    }
-
-    // 最后的后备选项：只有在内容确实不为空且有意义时才转换为字符串
-    if (
-      content !== undefined &&
-      content !== null &&
-      content !== '' &&
-      typeof content !== 'object'
-    ) {
-      return String(content)
-    }
-
-    return ''
+// 应用速率限制追踪
+async function applyRateLimitTracking(req, usageSummary, model, context = '') {
+  if (!req.rateLimitInfo) {
+    return
   }
 
-  for (const message of messages) {
-    const textContent = extractTextContent(message.content)
+  const label = context ? ` (${context})` : ''
 
-    if (message.role === 'system') {
-      systemInstruction += (systemInstruction ? '\n\n' : '') + textContent
-    } else if (message.role === 'user') {
-      contents.push({
-        role: 'user',
-        parts: [{ text: textContent }]
-      })
-    } else if (message.role === 'assistant') {
-      contents.push({
-        role: 'model',
-        parts: [{ text: textContent }]
-      })
+  try {
+    const { totalTokens, totalCost } = await updateRateLimitCounters(
+      req.rateLimitInfo,
+      usageSummary,
+      model
+    )
+
+    if (totalTokens > 0) {
+      logger.api(`📊 Updated rate limit token count${label}: +${totalTokens} tokens`)
     }
-  }
-
-  return { contents, systemInstruction }
-}
-
-// 转换 Gemini 响应到 OpenAI 格式
-function convertGeminiResponseToOpenAI(geminiResponse, model, stream = false) {
-  if (stream) {
-    // 处理流式响应 - 原样返回 SSE 数据
-    return geminiResponse
-  } else {
-    // 非流式响应转换
-    // 处理嵌套的 response 结构
-    const actualResponse = geminiResponse.response || geminiResponse
-
-    if (actualResponse.candidates && actualResponse.candidates.length > 0) {
-      const candidate = actualResponse.candidates[0]
-      const content = candidate.content?.parts?.[0]?.text || ''
-      const finishReason = candidate.finishReason?.toLowerCase() || 'stop'
-
-      // 计算 token 使用量
-      const usage = actualResponse.usageMetadata || {
-        promptTokenCount: 0,
-        candidatesTokenCount: 0,
-        totalTokenCount: 0
-      }
-
-      return {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message: {
-              role: 'assistant',
-              content
-            },
-            finish_reason: finishReason
-          }
-        ],
-        usage: {
-          prompt_tokens: usage.promptTokenCount,
-          completion_tokens: usage.candidatesTokenCount,
-          total_tokens: usage.totalTokenCount
-        }
-      }
-    } else {
-      throw new Error('No response from Gemini')
+    if (typeof totalCost === 'number' && totalCost > 0) {
+      logger.api(`💰 Updated rate limit cost count${label}: +$${totalCost.toFixed(6)}`)
     }
+  } catch (error) {
+    logger.error(`❌ Failed to update rate limit counters${label}:`, error)
   }
 }
 
@@ -263,7 +142,7 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
     }
 
     // 转换消息格式
-    const { contents: geminiContents, systemInstruction } = convertMessagesToGemini(messages)
+    const { contents: geminiContents, systemInstruction } = convertOpenAIMessagesToGemini(messages)
 
     // 构建 Gemini 请求体
     const geminiRequestBody = {
@@ -512,6 +391,18 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
             logger.info(
               `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`
             )
+
+            await applyRateLimitTracking(
+              req,
+              {
+                inputTokens: totalUsage.promptTokenCount || 0,
+                outputTokens: totalUsage.candidatesTokenCount || 0,
+                cacheCreateTokens: 0,
+                cacheReadTokens: 0
+              },
+              model,
+              'openai-gemini-stream'
+            )
           } catch (error) {
             logger.error('Failed to record Gemini usage:', error)
           }
@@ -574,6 +465,18 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
           )
           logger.info(
             `📊 Recorded Gemini usage - Input: ${openaiResponse.usage.prompt_tokens}, Output: ${openaiResponse.usage.completion_tokens}, Total: ${openaiResponse.usage.total_tokens}`
+          )
+
+          await applyRateLimitTracking(
+            req,
+            {
+              inputTokens: openaiResponse.usage.prompt_tokens || 0,
+              outputTokens: openaiResponse.usage.completion_tokens || 0,
+              cacheCreateTokens: 0,
+              cacheReadTokens: 0
+            },
+            model,
+            'openai-gemini-non-stream'
           )
         } catch (error) {
           logger.error('Failed to record Gemini usage:', error)

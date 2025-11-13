@@ -10,6 +10,7 @@ const unifiedGeminiScheduler = require('../services/unifiedGeminiScheduler')
 const apiKeyService = require('../services/apiKeyService')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { parseSSELine } = require('../utils/sseParser')
+const { convertOpenAIMessagesToGemini } = require('../utils/geminiFormatConverter')
 // const { OAuth2Client } = require('google-auth-library'); // OAuth2Client is not used in this file
 
 // 生成会话哈希
@@ -666,12 +667,10 @@ async function handleGenerateContent(req, res) {
     let actualRequestData = requestData
     if (!requestData) {
       if (req.body.messages) {
-        // 这是 OpenAI 格式的请求，构建 Gemini 格式的 request 对象
+        // 这是 OpenAI 格式的请求，使用统一的转换函数
+        const { contents } = convertOpenAIMessagesToGemini(req.body.messages)
         actualRequestData = {
-          contents: req.body.messages.map((msg) => ({
-            role: msg.role === 'assistant' ? 'model' : msg.role,
-            parts: [{ text: msg.content }]
-          })),
+          contents,
           generationConfig: {
             temperature: req.body.temperature !== undefined ? req.body.temperature : 0.7,
             maxOutputTokens: req.body.max_tokens !== undefined ? req.body.max_tokens : 4096,
@@ -820,12 +819,10 @@ async function handleStreamGenerateContent(req, res) {
     let actualRequestData = requestData
     if (!requestData) {
       if (req.body.messages) {
-        // 这是 OpenAI 格式的请求，构建 Gemini 格式的 request 对象
+        // 这是 OpenAI 格式的请求，使用统一的转换函数
+        const { contents } = convertOpenAIMessagesToGemini(req.body.messages)
         actualRequestData = {
-          contents: req.body.messages.map((msg) => ({
-            role: msg.role === 'assistant' ? 'model' : msg.role,
-            parts: [{ text: msg.content }]
-          })),
+          contents,
           generationConfig: {
             temperature: req.body.temperature !== undefined ? req.body.temperature : 0.7,
             maxOutputTokens: req.body.max_tokens !== undefined ? req.body.max_tokens : 4096,

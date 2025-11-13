@@ -7,6 +7,7 @@ const unifiedGeminiScheduler = require('../services/unifiedGeminiScheduler')
 const apiKeyService = require('../services/apiKeyService')
 const sessionHelper = require('../utils/sessionHelper')
 const { parseSSELine } = require('../utils/sseParser')
+const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 
 // 导入 geminiRoutes 中导出的处理函数
 const { handleLoadCodeAssist, handleOnboardUser, handleCountTokens } = require('./geminiRoutes')
@@ -43,6 +44,32 @@ function ensureGeminiPermissionMiddleware(req, res, next) {
     return next()
   }
   return undefined
+}
+
+// 应用速率限制追踪
+async function applyRateLimitTracking(req, usageSummary, model, context = '') {
+  if (!req.rateLimitInfo) {
+    return
+  }
+
+  const label = context ? ` (${context})` : ''
+
+  try {
+    const { totalTokens, totalCost } = await updateRateLimitCounters(
+      req.rateLimitInfo,
+      usageSummary,
+      model
+    )
+
+    if (totalTokens > 0) {
+      logger.api(`📊 Updated rate limit token count${label}: +${totalTokens} tokens`)
+    }
+    if (typeof totalCost === 'number' && totalCost > 0) {
+      logger.api(`💰 Updated rate limit cost count${label}: +$${totalCost.toFixed(6)}`)
+    }
+  } catch (error) {
+    logger.error(`❌ Failed to update rate limit counters${label}:`, error)
+  }
 }
 
 // 判断对象是否为可读流
@@ -305,6 +332,18 @@ async function handleStandardGenerateContent(req, res) {
         )
         logger.info(
           `📊 Recorded Gemini usage - Input: ${usage.promptTokenCount}, Output: ${usage.candidatesTokenCount}, Total: ${usage.totalTokenCount}`
+        )
+
+        await applyRateLimitTracking(
+          req,
+          {
+            inputTokens: usage.promptTokenCount || 0,
+            outputTokens: usage.candidatesTokenCount || 0,
+            cacheCreateTokens: 0,
+            cacheReadTokens: 0
+          },
+          model,
+          'standard-gemini-non-stream'
         )
       } catch (error) {
         logger.error('Failed to record Gemini usage:', error)
@@ -590,6 +629,18 @@ async function handleStandardStreamGenerateContent(req, res) {
           )
           logger.info(
             `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`
+          )
+
+          await applyRateLimitTracking(
+            req,
+            {
+              inputTokens: totalUsage.promptTokenCount || 0,
+              outputTokens: totalUsage.candidatesTokenCount || 0,
+              cacheCreateTokens: 0,
+              cacheReadTokens: 0
+            },
+            model,
+            'standard-gemini-stream'
           )
         } catch (error) {
           logger.error('Failed to record Gemini usage:', error)
