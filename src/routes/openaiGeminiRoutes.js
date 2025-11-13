@@ -11,6 +11,7 @@ const {
   convertGeminiResponseToOpenAI
 } = require('../utils/geminiFormatConverter')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
+const { parseSSELine } = require('../utils/sseParser')
 
 // 生成会话哈希
 function generateSessionHash(req) {
@@ -284,79 +285,82 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
               continue
             }
 
-            // 处理 SSE 格式
-            let jsonData = line
-            if (line.startsWith('data: ')) {
-              jsonData = line.substring(6).trim()
-            }
+            // 使用统一的 SSE 解析器
+            const parsed = parseSSELine(line)
 
-            if (!jsonData || jsonData === '[DONE]') {
+            // 记录无效的解析
+            if (parsed.type === 'invalid') {
+              logger.warn('Failed to parse SSE line:', {
+                line: parsed.line.substring(0, 100),
+                error: parsed.error.message
+              })
               continue
             }
 
-            try {
-              const data = JSON.parse(jsonData)
+            // 跳过非数据行
+            if (parsed.type !== 'data') {
+              continue
+            }
 
-              // 捕获usage数据
-              if (data.response?.usageMetadata) {
-                totalUsage = data.response.usageMetadata
-                logger.debug('📊 Captured Gemini usage data:', totalUsage)
-              }
+            const data = parsed.data
 
-              // 转换为 OpenAI 流式格式
-              if (data.response?.candidates && data.response.candidates.length > 0) {
-                const candidate = data.response.candidates[0]
-                const content = candidate.content?.parts?.[0]?.text || ''
-                const { finishReason } = candidate
+            // 捕获usage数据
+            if (data.response?.usageMetadata) {
+              totalUsage = data.response.usageMetadata
+              logger.debug('📊 Captured Gemini usage data:', totalUsage)
+            }
 
-                // 只有当有内容或者是结束标记时才发送数据
-                if (content || finishReason === 'STOP') {
-                  const openaiChunk = {
-                    id: `chatcmpl-${Date.now()}`,
-                    object: 'chat.completion.chunk',
-                    created: Math.floor(Date.now() / 1000),
-                    model,
-                    choices: [
-                      {
-                        index: 0,
-                        delta: content ? { content } : {},
-                        finish_reason: finishReason === 'STOP' ? 'stop' : null
-                      }
-                    ]
-                  }
+            // 转换为 OpenAI 流式格式
+            if (data.response?.candidates && data.response.candidates.length > 0) {
+              const candidate = data.response.candidates[0]
+              const content = candidate.content?.parts?.[0]?.text || ''
+              const { finishReason } = candidate
 
-                  res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`)
-
-                  // 如果结束了，添加 usage 信息并发送最终的 [DONE]
-                  if (finishReason === 'STOP') {
-                    // 如果有 usage 数据，添加到最后一个 chunk
-                    if (data.response.usageMetadata) {
-                      const usageChunk = {
-                        id: `chatcmpl-${Date.now()}`,
-                        object: 'chat.completion.chunk',
-                        created: Math.floor(Date.now() / 1000),
-                        model,
-                        choices: [
-                          {
-                            index: 0,
-                            delta: {},
-                            finish_reason: 'stop'
-                          }
-                        ],
-                        usage: {
-                          prompt_tokens: data.response.usageMetadata.promptTokenCount || 0,
-                          completion_tokens: data.response.usageMetadata.candidatesTokenCount || 0,
-                          total_tokens: data.response.usageMetadata.totalTokenCount || 0
-                        }
-                      }
-                      res.write(`data: ${JSON.stringify(usageChunk)}\n\n`)
+              // 只有当有内容或者是结束标记时才发送数据
+              if (content || finishReason === 'STOP') {
+                const openaiChunk = {
+                  id: `chatcmpl-${Date.now()}`,
+                  object: 'chat.completion.chunk',
+                  created: Math.floor(Date.now() / 1000),
+                  model,
+                  choices: [
+                    {
+                      index: 0,
+                      delta: content ? { content } : {},
+                      finish_reason: finishReason === 'STOP' ? 'stop' : null
                     }
-                    res.write('data: [DONE]\n\n')
+                  ]
+                }
+
+                res.write(`data: ${JSON.stringify(openaiChunk)}\n\n`)
+
+                // 如果结束了，添加 usage 信息并发送最终的 [DONE]
+                if (finishReason === 'STOP') {
+                  // 如果有 usage 数据，添加到最后一个 chunk
+                  if (data.response.usageMetadata) {
+                    const usageChunk = {
+                      id: `chatcmpl-${Date.now()}`,
+                      object: 'chat.completion.chunk',
+                      created: Math.floor(Date.now() / 1000),
+                      model,
+                      choices: [
+                        {
+                          index: 0,
+                          delta: {},
+                          finish_reason: 'stop'
+                        }
+                      ],
+                      usage: {
+                        prompt_tokens: data.response.usageMetadata.promptTokenCount || 0,
+                        completion_tokens: data.response.usageMetadata.candidatesTokenCount || 0,
+                        total_tokens: data.response.usageMetadata.totalTokenCount || 0
+                      }
+                    }
+                    res.write(`data: ${JSON.stringify(usageChunk)}\n\n`)
                   }
+                  res.write('data: [DONE]\n\n')
                 }
               }
-            } catch (e) {
-              logger.debug('Error parsing JSON line:', e.message)
             }
           }
         } catch (error) {
