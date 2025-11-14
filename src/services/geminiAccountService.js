@@ -19,7 +19,11 @@ const LRUCache = require('../utils/lruCache')
 // Gemini CLI OAuth 配置 - 这些是公开的 Gemini CLI 凭据
 const OAUTH_CLIENT_ID = '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com'
 const OAUTH_CLIENT_SECRET = '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'
-const OAUTH_SCOPES = ['https://www.googleapis.com/auth/cloud-platform']
+const OAUTH_SCOPES = [
+  'https://www.googleapis.com/auth/cloud-platform',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile'
+]
 
 // 加密相关常量
 const ALGORITHM = 'aes-256-cbc'
@@ -1424,7 +1428,8 @@ async function generateContent(
   userPromptId,
   projectId = null,
   sessionId = null,
-  proxyConfig = null
+  proxyConfig = null,
+  clientHeaders = null
 ) {
   const axios = require('axios')
   const CODE_ASSIST_ENDPOINT = 'https://cloudcode-pa.googleapis.com'
@@ -1475,6 +1480,16 @@ async function generateContent(
     timeout: 60000 // 生成内容可能需要更长时间
   }
 
+  // 🔍 转发客户端请求头，帮助 Google 识别官方客户端
+  if (clientHeaders) {
+    if (clientHeaders['user-agent']) {
+      axiosConfig.headers['User-Agent'] = clientHeaders['user-agent']
+    }
+    if (clientHeaders['x-goog-api-client']) {
+      axiosConfig.headers['x-goog-api-client'] = clientHeaders['x-goog-api-client']
+    }
+  }
+
   // 添加代理配置
   const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
   if (proxyAgent) {
@@ -1502,6 +1517,7 @@ async function generateContentStream(
   projectId = null,
   sessionId = null,
   signal = null,
+  clientHeaders = null,
   proxyConfig = null
 ) {
   const axios = require('axios')
@@ -1549,6 +1565,16 @@ async function generateContentStream(
     data: request,
     responseType: 'stream',
     timeout: 60000
+  }
+
+  // 🔍 转发客户端请求头，帮助 Google 识别官方客户端
+  if (clientHeaders) {
+    if (clientHeaders['user-agent']) {
+      axiosConfig.headers['User-Agent'] = clientHeaders['user-agent']
+    }
+    if (clientHeaders['x-goog-api-client']) {
+      axiosConfig.headers['x-goog-api-client'] = clientHeaders['x-goog-api-client']
+    }
   }
 
   // 添加代理配置
