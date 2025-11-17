@@ -77,12 +77,7 @@ function extractTextContent(content) {
   }
 
   // 最后的后备选项：只有在内容确实不为空且有意义时才转换为字符串
-  if (
-    content !== undefined &&
-    content !== null &&
-    content !== '' &&
-    typeof content !== 'object'
-  ) {
+  if (content !== undefined && content !== null && content !== '' && typeof content !== 'object') {
     return String(content)
   }
 

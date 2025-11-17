@@ -11,7 +11,10 @@ const DEFAULT_MODEL = 'models/gemini-2.0-flash-exp'
 // 硬编码的模型列表（与 gemini-cli 保持一致）
 // 参考：https://ai.google.dev/gemini-api/docs/models
 const SUPPORTED_MODELS = [
-  { id: 'gemini-2.5-pro', description: 'For complex tasks requiring deep reasoning and creativity' },
+  {
+    id: 'gemini-2.5-pro',
+    description: 'For complex tasks requiring deep reasoning and creativity'
+  },
   { id: 'gemini-2.5-flash', description: 'For tasks needing a balance of speed and reasoning' },
   { id: 'gemini-2.5-flash-lite', description: 'For simple tasks that need to be done quickly' }
 ]
