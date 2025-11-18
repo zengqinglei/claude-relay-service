@@ -924,8 +924,9 @@ async function handleStreamGenerateContent(req, res) {
     res.setHeader('X-Accel-Buffering', 'no')
 
     // 处理流式响应并捕获usage数据
-    // 方案 A++：透明转发 + 异步 usage 提取
-    let streamBuffer = '' // 缓冲区用于处理不完整的行
+    // 方案：行缓冲透明转发 + 异步 usage 提取
+    let lineBuffer = '' // 用于确保转发完整的 SSE 行
+    let streamBuffer = '' // 用于 usage 数据提取
     let totalUsage = {
       promptTokenCount: 0,
       candidatesTokenCount: 0,
@@ -935,10 +936,17 @@ async function handleStreamGenerateContent(req, res) {
 
     streamResponse.on('data', (chunk) => {
       try {
-        // 1️⃣ 立即转发原始数据（零延迟，最高优先级）
-        // 对所有版本（v1beta 和 v1internal）都采用透明转发
-        if (!res.destroyed) {
-          res.write(chunk) // 直接转发 Buffer，无需转换和序列化
+        const chunkStr = chunk.toString()
+
+        // 1️⃣ 行缓冲转发（确保 SSE 行完整性）
+        lineBuffer += chunkStr
+        const lines = lineBuffer.split('\n')
+        lineBuffer = lines.pop() || '' // 保留最后一个不完整的行
+
+        // 转发完整的行
+        if (lines.length > 0 && !res.destroyed) {
+          const linesToForward = lines.join('\n') + '\n'
+          res.write(linesToForward)
         }
 
         // 2️⃣ 异步提取 usage 数据（不阻塞转发）
@@ -989,6 +997,11 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('end', async () => {
+      // 转发最后的不完整行（如果有）
+      if (lineBuffer && !res.destroyed) {
+        res.write(lineBuffer)
+      }
+
       logger.info('Stream completed successfully')
 
       // 记录使用统计
