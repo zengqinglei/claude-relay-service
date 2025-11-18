@@ -1564,7 +1564,7 @@ async function generateContentStream(
     },
     data: request,
     responseType: 'stream',
-    timeout: 60000
+    timeout: 0 // 流式请求不设置超时限制，由 keepAlive 和 AbortSignal 控制
   }
 
   // 添加代理配置
