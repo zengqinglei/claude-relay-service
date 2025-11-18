@@ -515,6 +515,15 @@ async function handleStandardStreamGenerateContent(req, res) {
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
 
+    // 📊 诊断：记录上游响应头
+    logger.debug('📊 Upstream response headers:', {
+      'content-type': streamResponse.headers['content-type'],
+      'content-encoding': streamResponse.headers['content-encoding'],
+      'transfer-encoding': streamResponse.headers['transfer-encoding'],
+      'connection': streamResponse.headers['connection'],
+      'cache-control': streamResponse.headers['cache-control']
+    })
+
     // 关键修复：为这个返回给客户端的响应连接启用TCP Keep-Alive
     if (res.socket) {
       res.socket.setKeepAlive(true, 30000) // 每30秒发送一次TCP探测包
@@ -523,6 +532,8 @@ async function handleStandardStreamGenerateContent(req, res) {
     // SSE 心跳机制：防止代理层（如Clash）因长时间无数据而断开连接
     let heartbeatTimer = null
     let lastDataTime = Date.now()
+    let firstDataTime = null
+    let dataChunkCount = 0
     const HEARTBEAT_INTERVAL = 15000 // 每15秒发送一次心跳
 
     const sendHeartbeat = () => {
@@ -552,7 +563,16 @@ async function handleStandardStreamGenerateContent(req, res) {
         const chunkStr = chunk.toString()
 
         // 更新最后数据时间（有数据到达，重置心跳计时）
-        lastDataTime = Date.now()
+        const now = Date.now()
+        const intervalSinceLastData = lastDataTime ? now - lastDataTime : 0
+        lastDataTime = now
+        if (!firstDataTime) firstDataTime = now
+        dataChunkCount++
+
+        // 📊 诊断：记录数据传输间隔（只记录间隔较长的）
+        if (intervalSinceLastData > 10000) {
+          logger.warn(`⚠️ Long data gap detected: ${(intervalSinceLastData / 1000).toFixed(1)}s since last chunk`)
+        }
 
         // 1️⃣ 行缓冲转发（确保 SSE 行完整性）
         lineBuffer += chunkStr
@@ -626,7 +646,10 @@ async function handleStandardStreamGenerateContent(req, res) {
 
       // 立即结束响应流，不要等待异步操作
       res.end()
-      logger.info('Stream completed successfully')
+
+      // 📊 诊断：记录流传输统计
+      const totalDuration = firstDataTime ? Date.now() - firstDataTime : 0
+      logger.info(`Stream completed successfully - Duration: ${(totalDuration / 1000).toFixed(1)}s, Chunks: ${dataChunkCount}, Avg interval: ${dataChunkCount > 0 ? (totalDuration / dataChunkCount / 1000).toFixed(2) : 0}s`)
 
       // 异步记录使用统计（不阻塞响应结束）
       if (totalUsage.totalTokenCount > 0) {
