@@ -946,10 +946,10 @@ async function handleStreamGenerateContent(req, res) {
 
     const sendHeartbeat = () => {
       const timeSinceLastData = Date.now() - lastDataTime
-      // 如果超过15秒没有收到数据，发送心跳
+      // 如果超过15秒没有收到数据，发送心跳（空行保持连接活跃）
       if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
-        res.write(': keepalive\n\n') // SSE 注释格式，客户端会忽略
-        logger.debug('💓 Sent SSE keepalive heartbeat')
+        res.write('\n') // 发送空行保持连接活跃，不会触发客户端解析
+        logger.debug('💓 Sent keepalive heartbeat')
       }
     }
 
