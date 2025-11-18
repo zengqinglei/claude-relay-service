@@ -913,6 +913,17 @@ async function handleStreamGenerateContent(req, res) {
       decision: account.projectId ? '使用账户配置' : project ? '使用请求参数' : '不使用项目ID'
     })
 
+    // 📊 诊断：记录客户端请求头
+    logger.info('📊 Client request headers:', {
+      'user-agent': req.headers['user-agent'],
+      'content-type': req.headers['content-type'],
+      'accept': req.headers['accept'],
+      'accept-encoding': req.headers['accept-encoding'],
+      'connection': req.headers['connection'],
+      'cache-control': req.headers['cache-control'],
+      'host': req.headers['host']
+    })
+
     const streamResponse = await geminiAccountService.generateContentStream(
       client,
       { model, request: actualRequestData },
@@ -924,23 +935,10 @@ async function handleStreamGenerateContent(req, res) {
     )
 
     // 设置 SSE 响应头
-
     res.setHeader('Content-Type', 'text/event-stream')
-
     res.setHeader('Cache-Control', 'no-cache')
-
     res.setHeader('Connection', 'keep-alive')
-
     res.setHeader('X-Accel-Buffering', 'no')
-
-    // 📊 诊断：记录上游响应头
-    logger.info('📊 Upstream response headers:', {
-      'content-type': streamResponse.headers['content-type'],
-      'content-encoding': streamResponse.headers['content-encoding'],
-      'transfer-encoding': streamResponse.headers['transfer-encoding'],
-      'connection': streamResponse.headers['connection'],
-      'cache-control': streamResponse.headers['cache-control']
-    })
 
     // 关键修复：为这个返回给客户端的响应连接启用TCP Keep-Alive
 
@@ -948,24 +946,10 @@ async function handleStreamGenerateContent(req, res) {
       res.socket.setKeepAlive(true, 30000) // 每30秒发送一次TCP探测包
     }
 
-    // SSE 心跳机制：防止代理层（如Clash）因长时间无数据而断开连接
-    let heartbeatTimer = null
-    let lastDataTime = Date.now()
+    // 📊 诊断：流传输统计变量
     let firstDataTime = null
+    let lastDataTime = null
     let dataChunkCount = 0
-    const HEARTBEAT_INTERVAL = 15000 // 每15秒发送一次心跳
-
-    const sendHeartbeat = () => {
-      const timeSinceLastData = Date.now() - lastDataTime
-      // 如果超过15秒没有收到数据，发送心跳（空行保持连接活跃）
-      if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
-        res.write('\n') // 发送空行保持连接活跃，不会触发客户端解析
-        logger.info(`💓 Sent keepalive heartbeat (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
-      }
-    }
-
-    // 启动心跳定时器
-    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL)
 
     // 处理流式响应并捕获usage数据
 
@@ -1056,12 +1040,6 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('end', async () => {
-      // 清理心跳定时器
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer)
-        heartbeatTimer = null
-      }
-
       // 转发最后的不完整行（如果有）
       if (lineBuffer && !res.destroyed) {
         res.write(lineBuffer)
@@ -1117,12 +1095,6 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('error', (error) => {
-      // 清理心跳定时器
-      if (heartbeatTimer) {
-        clearInterval(heartbeatTimer)
-        heartbeatTimer = null
-      }
-
       logger.error('Stream error:', error)
       if (!res.headersSent) {
         // 如果还没发送响应头，可以返回正常的错误响应
