@@ -1588,7 +1588,21 @@ async function generateContentStream(
     axiosConfig.signal = signal
   }
 
+  // 📊 诊断：记录发送给上游的请求头和配置
+  logger.info('📊 Upstream request config:', {
+    url: axiosConfig.url,
+    method: axiosConfig.method,
+    headers: axiosConfig.headers,
+    params: axiosConfig.params,
+    hasProxy: !!proxyAgent,
+    hasKeepAlive: !proxyAgent,
+    timeout: axiosConfig.timeout
+  })
+
   const response = await axios(axiosConfig)
+
+  // 📊 诊断：记录上游返回的完整响应头
+  logger.info('📊 Upstream response headers (full):', response.headers)
 
   logger.info('✅ streamGenerateContent API调用成功，开始流式传输')
   return response.data // 返回流对象
