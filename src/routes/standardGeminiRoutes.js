@@ -516,7 +516,7 @@ async function handleStandardStreamGenerateContent(req, res) {
     res.setHeader('X-Accel-Buffering', 'no')
 
     // 📊 诊断：记录上游响应头
-    logger.debug('📊 Upstream response headers:', {
+    logger.info('📊 Upstream response headers:', {
       'content-type': streamResponse.headers['content-type'],
       'content-encoding': streamResponse.headers['content-encoding'],
       'transfer-encoding': streamResponse.headers['transfer-encoding'],
@@ -541,7 +541,7 @@ async function handleStandardStreamGenerateContent(req, res) {
       // 如果超过15秒没有收到数据，发送心跳（空行保持连接活跃）
       if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
         res.write('\n') // 发送空行保持连接活跃，不会触发客户端解析
-        logger.debug('💓 Sent keepalive heartbeat')
+        logger.info(`💓 Sent keepalive heartbeat (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
       }
     }
 
