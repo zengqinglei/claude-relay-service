@@ -876,6 +876,12 @@ async function handleStreamGenerateContent(req, res) {
 
     // 处理客户端断开连接
     req.on('close', () => {
+      // 清理心跳定时器（稍后会创建）
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+
       if (abortController && !abortController.signal.aborted) {
         logger.info('Client disconnected, aborting stream request')
         abortController.abort()
@@ -933,6 +939,23 @@ async function handleStreamGenerateContent(req, res) {
       res.socket.setKeepAlive(true, 30000) // 每30秒发送一次TCP探测包
     }
 
+    // SSE 心跳机制：防止代理层（如Clash）因长时间无数据而断开连接
+    let heartbeatTimer = null
+    let lastDataTime = Date.now()
+    const HEARTBEAT_INTERVAL = 15000 // 每15秒发送一次心跳
+
+    const sendHeartbeat = () => {
+      const timeSinceLastData = Date.now() - lastDataTime
+      // 如果超过15秒没有收到数据，发送心跳
+      if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
+        res.write(': keepalive\n\n') // SSE 注释格式，客户端会忽略
+        logger.debug('💓 Sent SSE keepalive heartbeat')
+      }
+    }
+
+    // 启动心跳定时器
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL)
+
     // 处理流式响应并捕获usage数据
 
     // 方案 A++：透明转发 + 异步 usage 提取
@@ -948,6 +971,9 @@ async function handleStreamGenerateContent(req, res) {
     streamResponse.on('data', (chunk) => {
       try {
         const chunkStr = chunk.toString()
+
+        // 更新最后数据时间（有数据到达，重置心跳计时）
+        lastDataTime = Date.now()
 
         // 1️⃣ 行缓冲转发（确保 SSE 行完整性）
         lineBuffer += chunkStr
@@ -1008,6 +1034,12 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('end', async () => {
+      // 清理心跳定时器
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+
       // 转发最后的不完整行（如果有）
       if (lineBuffer && !res.destroyed) {
         res.write(lineBuffer)
@@ -1058,6 +1090,12 @@ async function handleStreamGenerateContent(req, res) {
     })
 
     streamResponse.on('error', (error) => {
+      // 清理心跳定时器
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+
       logger.error('Stream error:', error)
       if (!res.headersSent) {
         // 如果还没发送响应头，可以返回正常的错误响应
