@@ -918,13 +918,24 @@ async function handleStreamGenerateContent(req, res) {
     )
 
     // 设置 SSE 响应头
+
     res.setHeader('Content-Type', 'text/event-stream')
+
     res.setHeader('Cache-Control', 'no-cache')
+
     res.setHeader('Connection', 'keep-alive')
+
     res.setHeader('X-Accel-Buffering', 'no')
 
+    // 关键修复：为这个返回给客户端的响应连接启用TCP Keep-Alive
+
+    if (res.socket) {
+      res.socket.setKeepAlive(true, 30000) // 每30秒发送一次TCP探测包
+    }
+
     // 处理流式响应并捕获usage数据
-    // 方案：行缓冲透明转发 + 异步 usage 提取
+
+    // 方案 A++：透明转发 + 异步 usage 提取
     let lineBuffer = '' // 用于确保转发完整的 SSE 行
     let streamBuffer = '' // 用于 usage 数据提取
     let totalUsage = {
@@ -1002,44 +1013,48 @@ async function handleStreamGenerateContent(req, res) {
         res.write(lineBuffer)
       }
 
+      // 立即结束响应流，不要等待异步操作
+      res.end()
       logger.info('Stream completed successfully')
 
-      // 记录使用统计
+      // 异步记录使用统计（不阻塞响应结束）
       if (!usageReported && totalUsage.totalTokenCount > 0) {
-        try {
-          await apiKeyService.recordUsage(
-            req.apiKey.id,
-            totalUsage.promptTokenCount || 0,
-            totalUsage.candidatesTokenCount || 0,
-            0, // cacheCreateTokens
-            0, // cacheReadTokens
-            model,
-            account.id
-          )
-          logger.info(
-            `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`
-          )
+        const recordUsage = async () => {
+          try {
+            await apiKeyService.recordUsage(
+              req.apiKey.id,
+              totalUsage.promptTokenCount || 0,
+              totalUsage.candidatesTokenCount || 0,
+              0, // cacheCreateTokens
+              0, // cacheReadTokens
+              model,
+              account.id
+            )
+            logger.info(
+              `📊 Recorded Gemini stream usage - Input: ${totalUsage.promptTokenCount}, Output: ${totalUsage.candidatesTokenCount}, Total: ${totalUsage.totalTokenCount}`
+            )
 
-          await applyRateLimitTracking(
-            req,
-            {
-              inputTokens: totalUsage.promptTokenCount || 0,
-              outputTokens: totalUsage.candidatesTokenCount || 0,
-              cacheCreateTokens: 0,
-              cacheReadTokens: 0
-            },
-            model,
-            'gemini-stream'
-          )
+            await applyRateLimitTracking(
+              req,
+              {
+                inputTokens: totalUsage.promptTokenCount || 0,
+                outputTokens: totalUsage.candidatesTokenCount || 0,
+                cacheCreateTokens: 0,
+                cacheReadTokens: 0
+              },
+              model,
+              'gemini-stream'
+            )
 
-          // 修复：标记 usage 已上报，避免重复上报
-          usageReported = true
-        } catch (error) {
-          logger.error('Failed to record Gemini usage:', error)
+            // 修复：标记 usage 已上报，避免重复上报
+            usageReported = true
+          } catch (error) {
+            logger.error('Failed to record Gemini usage:', error)
+          }
         }
+        // 不等待，在后台执行
+        recordUsage()
       }
-
-      res.end()
     })
 
     streamResponse.on('error', (error) => {

@@ -355,11 +355,19 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
         proxyConfig // 传递代理配置
       )
 
-      // 设置流式响应头
+      // 设置 SSE 响应头
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('Cache-Control', 'no-cache')
       res.setHeader('Connection', 'keep-alive')
       res.setHeader('X-Accel-Buffering', 'no')
+
+      // 关键修复：为这个返回给客户端的响应连接启用TCP Keep-Alive
+      if (res.socket) {
+        res.socket.setKeepAlive(true, 30000) // 每30秒发送一次TCP探测包
+      }
+
+      // 创建中止控制器
+      abortController = new AbortController()
 
       // 处理流式响应，转换为 OpenAI 格式
       let buffer = ''
