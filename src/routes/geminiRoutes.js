@@ -933,6 +933,15 @@ async function handleStreamGenerateContent(req, res) {
 
     res.setHeader('X-Accel-Buffering', 'no')
 
+    // 📊 诊断：记录上游响应头
+    logger.info('📊 Upstream response headers:', {
+      'content-type': streamResponse.headers['content-type'],
+      'content-encoding': streamResponse.headers['content-encoding'],
+      'transfer-encoding': streamResponse.headers['transfer-encoding'],
+      'connection': streamResponse.headers['connection'],
+      'cache-control': streamResponse.headers['cache-control']
+    })
+
     // 关键修复：为这个返回给客户端的响应连接启用TCP Keep-Alive
 
     if (res.socket) {
@@ -942,6 +951,8 @@ async function handleStreamGenerateContent(req, res) {
     // SSE 心跳机制：防止代理层（如Clash）因长时间无数据而断开连接
     let heartbeatTimer = null
     let lastDataTime = Date.now()
+    let firstDataTime = null
+    let dataChunkCount = 0
     const HEARTBEAT_INTERVAL = 15000 // 每15秒发送一次心跳
 
     const sendHeartbeat = () => {
@@ -949,7 +960,7 @@ async function handleStreamGenerateContent(req, res) {
       // 如果超过15秒没有收到数据，发送心跳（空行保持连接活跃）
       if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
         res.write('\n') // 发送空行保持连接活跃，不会触发客户端解析
-        logger.debug('💓 Sent keepalive heartbeat')
+        logger.info(`💓 Sent keepalive heartbeat (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
       }
     }
 
@@ -973,7 +984,18 @@ async function handleStreamGenerateContent(req, res) {
         const chunkStr = chunk.toString()
 
         // 更新最后数据时间（有数据到达，重置心跳计时）
-        lastDataTime = Date.now()
+        const now = Date.now()
+        const intervalSinceLastData = lastDataTime ? now - lastDataTime : 0
+        lastDataTime = now
+        if (!firstDataTime) firstDataTime = now
+        dataChunkCount++
+
+        // 检测长时间间隔（超过10秒）
+        if (intervalSinceLastData > 10000) {
+          logger.warn(
+            `⚠️ Long data gap detected: ${(intervalSinceLastData / 1000).toFixed(1)}s since last chunk`
+          )
+        }
 
         // 1️⃣ 行缓冲转发（确保 SSE 行完整性）
         lineBuffer += chunkStr
@@ -1047,7 +1069,12 @@ async function handleStreamGenerateContent(req, res) {
 
       // 立即结束响应流，不要等待异步操作
       res.end()
-      logger.info('Stream completed successfully')
+
+      // 流式传输完成统计
+      const totalDuration = firstDataTime ? Date.now() - firstDataTime : 0
+      logger.info(
+        `✅ Stream completed successfully - Duration: ${(totalDuration / 1000).toFixed(1)}s, Chunks: ${dataChunkCount}, Avg interval: ${dataChunkCount > 0 ? (totalDuration / dataChunkCount / 1000).toFixed(2) : 0}s`
+      )
 
       // 异步记录使用统计（不阻塞响应结束）
       if (!usageReported && totalUsage.totalTokenCount > 0) {
