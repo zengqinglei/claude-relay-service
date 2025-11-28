@@ -1650,17 +1650,19 @@ async function handleStreamGenerateContent(req, res) {
     // SSE 心跳机制
     let heartbeatTimer = null
     let lastDataTime = Date.now()
-    const HEARTBEAT_INTERVAL = 15000
+    const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
+    const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
 
     const sendHeartbeat = () => {
       const timeSinceLastData = Date.now() - lastDataTime
       if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
-        res.write('\n')
+        res.write(': keep-alive\n\n') // 标准SSE注释格式
+        lastDataTime = Date.now() // 更新时间戳，防止重复发送
         logger.info(`💓 Sent SSE keepalive (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
       }
     }
 
-    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL)
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_CHECK_INTERVAL)
 
     streamResponse.on('data', (chunk) => {
       try {
@@ -2332,17 +2334,19 @@ async function handleStandardStreamGenerateContent(req, res) {
 
     let heartbeatTimer = null
     let lastDataTime = Date.now()
-    const HEARTBEAT_INTERVAL = 15000
+    const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
+    const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
 
     const sendHeartbeat = () => {
       const timeSinceLastData = Date.now() - lastDataTime
       if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
-        res.write('\n')
+        res.write(': keep-alive\n\n') // 标准SSE注释格式
+        lastDataTime = Date.now() // 更新时间戳，防止重复发送
         logger.info(`💓 Sent SSE keepalive (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
       }
     }
 
-    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL)
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_CHECK_INTERVAL)
 
     let sseBuffer = ''
 
