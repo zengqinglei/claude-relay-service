@@ -1622,21 +1622,12 @@ async function handleStreamGenerateContent(req, res) {
           : '从loadCodeAssist获取'
     })
 
-    const streamResponse = await geminiAccountService.generateContentStream(
-      client,
-      { model, request: actualRequestData },
-      user_prompt_id,
-      effectiveProjectId,
-      req.apiKey?.id,
-      abortController.signal,
-      proxyConfig
-    )
-
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders() // 立即发送响应头，建立连接
 
     // 处理流式响应并捕获usage数据
     let streamBuffer = ''
@@ -1647,7 +1638,7 @@ async function handleStreamGenerateContent(req, res) {
     }
     let usageReported = false
 
-    // SSE 心跳机制
+    // SSE 心跳机制 - 在 await 之前启动，确保在等待上游响应期间也能发送心跳
     let heartbeatTimer = null
     let lastDataTime = Date.now()
     const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
@@ -1663,6 +1654,16 @@ async function handleStreamGenerateContent(req, res) {
     }
 
     heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_CHECK_INTERVAL)
+
+    const streamResponse = await geminiAccountService.generateContentStream(
+      client,
+      { model, request: actualRequestData },
+      user_prompt_id,
+      effectiveProjectId,
+      req.apiKey?.id,
+      abortController.signal,
+      proxyConfig
+    )
 
     streamResponse.on('data', (chunk) => {
       try {
@@ -2213,6 +2214,30 @@ async function handleStandardStreamGenerateContent(req, res) {
       }
     })
 
+    // 设置 SSE 响应头 - 在 await 之前立即发送，建立连接
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+    res.flushHeaders() // 立即发送响应头
+
+    // SSE 心跳机制 - 在 await 之前启动，确保在等待上游响应期间也能发送心跳
+    let heartbeatTimer = null
+    let lastDataTime = Date.now()
+    const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
+    const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
+
+    const sendHeartbeat = () => {
+      const timeSinceLastData = Date.now() - lastDataTime
+      if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
+        res.write(': keep-alive\n\n') // 标准SSE注释格式
+        lastDataTime = Date.now() // 更新时间戳，防止重复发送
+        logger.info(`💓 Sent SSE keepalive (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
+      }
+    }
+
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_CHECK_INTERVAL)
+
     // 解析账户的代理配置
     const proxyConfig = parseProxyConfig(account)
 
@@ -2319,34 +2344,12 @@ async function handleStandardStreamGenerateContent(req, res) {
       )
     }
 
-    // 设置 SSE 响应头
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
-    res.setHeader('X-Accel-Buffering', 'no')
-
     // 处理流式响应
     let totalUsage = {
       promptTokenCount: 0,
       candidatesTokenCount: 0,
       totalTokenCount: 0
     }
-
-    let heartbeatTimer = null
-    let lastDataTime = Date.now()
-    const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
-    const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
-
-    const sendHeartbeat = () => {
-      const timeSinceLastData = Date.now() - lastDataTime
-      if (timeSinceLastData >= HEARTBEAT_INTERVAL && !res.destroyed) {
-        res.write(': keep-alive\n\n') // 标准SSE注释格式
-        lastDataTime = Date.now() // 更新时间戳，防止重复发送
-        logger.info(`💓 Sent SSE keepalive (gap: ${(timeSinceLastData / 1000).toFixed(1)}s)`)
-      }
-    }
-
-    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_CHECK_INTERVAL)
 
     let sseBuffer = ''
 
