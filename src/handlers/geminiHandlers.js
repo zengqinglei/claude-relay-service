@@ -1479,6 +1479,7 @@ async function handleGenerateContent(req, res) {
  */
 async function handleStreamGenerateContent(req, res) {
   let abortController = null
+  let heartbeatTimer = null
 
   try {
     if (!ensureGeminiPermission(req, res)) {
@@ -1639,7 +1640,6 @@ async function handleStreamGenerateContent(req, res) {
     let usageReported = false
 
     // SSE 心跳机制 - 在 await 之前启动，确保在等待上游响应期间也能发送心跳
-    let heartbeatTimer = null
     let lastDataTime = Date.now()
     const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
     const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
@@ -1803,6 +1803,13 @@ async function handleStreamGenerateContent(req, res) {
       stack: error.stack
     })
 
+    // 清理心跳定时器
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+      logger.debug('💓 Heartbeat timer cleared due to error')
+    }
+
     if (!res.headersSent) {
       res.status(500).json({
         error: {
@@ -1810,6 +1817,25 @@ async function handleStreamGenerateContent(req, res) {
           type: 'api_error'
         }
       })
+    } else {
+      // 响应头已发送（SSE连接已建立），发送错误事件并结束流
+      if (!res.destroyed) {
+        try {
+          res.write(
+            `data: ${JSON.stringify({
+              error: {
+                message: error.message || 'Internal server error',
+                type: 'api_error',
+                code: error.code
+              }
+            })}\n\n`
+          )
+          res.write('data: [DONE]\n\n')
+        } catch (writeError) {
+          logger.error('Error sending error event:', writeError)
+        }
+      }
+      res.end()
     }
   } finally {
     if (abortController) {
@@ -2082,6 +2108,7 @@ async function handleStandardGenerateContent(req, res) {
  */
 async function handleStandardStreamGenerateContent(req, res) {
   let abortController = null
+  let heartbeatTimer = null
   let account = null
   let sessionHash = null
   let accountId = null
@@ -2222,7 +2249,6 @@ async function handleStandardStreamGenerateContent(req, res) {
     res.flushHeaders() // 立即发送响应头
 
     // SSE 心跳机制 - 在 await 之前启动，确保在等待上游响应期间也能发送心跳
-    let heartbeatTimer = null
     let lastDataTime = Date.now()
     const HEARTBEAT_INTERVAL = 12000 // 12秒阈值，确保15秒内有数据
     const HEARTBEAT_CHECK_INTERVAL = 3000 // 3秒检查频率
@@ -2524,6 +2550,13 @@ async function handleStandardStreamGenerateContent(req, res) {
       stack: error.stack
     })
 
+    // 清理心跳定时器
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
+      logger.debug('💓 Heartbeat timer cleared due to error')
+    }
+
     if (!res.headersSent) {
       const statusCode = normalizedError.status || 500
       const responseBody = {
@@ -2546,6 +2579,26 @@ async function handleStandardStreamGenerateContent(req, res) {
       }
 
       return res.status(statusCode).json(responseBody)
+    } else {
+      // 响应头已发送（SSE连接已建立），发送错误事件并结束流
+      if (!res.destroyed) {
+        try {
+          res.write(
+            `data: ${JSON.stringify({
+              error: {
+                message: normalizedError.message,
+                type: 'api_error',
+                code: error.code,
+                upstreamStatus: normalizedError.status
+              }
+            })}\n\n`
+          )
+          res.write('data: [DONE]\n\n')
+        } catch (writeError) {
+          logger.error('Error sending error event:', writeError)
+        }
+      }
+      res.end()
     }
   } finally {
     if (abortController) {
